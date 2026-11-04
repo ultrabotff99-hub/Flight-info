@@ -1,0 +1,106 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>SkyRadar</title>
+<style>
+:root{--g:#2dff8a;--bg:#000b06}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:var(--bg);color:var(--g);font-family:ui-monospace,Menlo,monospace;overflow:hidden;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%}
+#top{position:fixed;top:0;left:0;right:0;padding:calc(env(safe-area-inset-top,0px) + 10px) 14px 8px;display:flex;justify-content:space-between;font-size:12px;letter-spacing:2px;text-shadow:0 0 8px var(--g)}
+#rng{position:fixed;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);left:0;right:0;display:flex;justify-content:center;gap:8px}
+#rng button{background:#00170d;color:var(--g);border:1px solid #1b6b3d;padding:8px 14px;border-radius:18px;font:inherit}
+#rng button.on{background:var(--g);color:#001a0d}
+#card{position:fixed;left:10px;right:10px;bottom:calc(env(safe-area-inset-bottom,0px) + 62px);background:rgba(0,25,14,.92);border:1px solid #1b6b3d;border-radius:16px;padding:14px;transform:translateY(140%);transition:transform .35s cubic-bezier(.2,.9,.3,1);box-shadow:0 0 24px rgba(45,255,138,.25)}
+#card.show{transform:none}
+#card h2{font-size:20px;letter-spacing:2px}#card .route{font-size:22px;margin:6px 0;color:#fff}
+#card .grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:12px;opacity:.9}
+#alert{position:fixed;top:calc(env(safe-area-inset-top,0px) + 44px);left:50%;transform:translate(-50%,-200%);background:#ff3b3b;color:#fff;padding:10px 18px;border-radius:24px;font-weight:700;transition:transform .4s;white-space:nowrap;box-shadow:0 0 30px #ff3b3b}
+#alert.show{transform:translate(-50%,0)}
+#intro{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity 1.2s,transform 1.2s;z-index:9}
+#intro h1{font-size:34px;letter-spacing:12px;animation:z 3s ease-out forwards}
+#intro p{margin-top:14px;font-size:12px;letter-spacing:3px;opacity:.7}
+#intro.out{opacity:0;transform:scale(1.6);pointer-events:none}
+@keyframes z{from{transform:scale(.6);opacity:0;filter:blur(8px)}to{transform:scale(1);opacity:1;filter:none}}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="top"><span>SKYRADAR</span><span id="st">LOCATING…</span></div>
+<div id="alert"></div>
+<div id="card"></div>
+<div id="rng"></div>
+<div id="intro"><h1>SKYRADAR</h1><p id="ip">ACQUIRING SIGNAL…</p></div>
+<script>
+const AIRLINES={AIC:'Air India',IGO:'IndiGo',SEJ:'SpiceJet',VTI:'Vistara',AXB:'Air India Express',IAD:'AirAsia India',UAE:'Emirates',ETD:'Etihad',QTR:'Qatar Airways',SIA:'Singapore Airlines',BAW:'British Airways',DLH:'Lufthansa',AFR:'Air France',KLM:'KLM',THY:'Turkish Airlines',SVA:'Saudia',GFA:'Gulf Air',OMA:'Oman Air',KAC:'Kuwait Airways',FDB:'flydubai',ABY:'Air Arabia',SDG:'SpiceJet',ALK:'SriLankan',UAL:'United',AAL:'American',DAL:'Delta',RYR:'Ryanair',EZY:'easyJet',THA:'Thai Airways',MAS:'Malaysia Airlines',CPA:'Cathay Pacific',QFA:'Qantas',ETH:'Ethiopian',FIN:'Finnair',SWR:'Swiss',MXD:'Batik/Malindo',AKJ:'Akasa Air',FLN:'Fly91'};
+const cv=document.getElementById('c'),x=cv.getContext('2d');
+let W,H,R,cx,cy,DPR=devicePixelRatio||1;
+function rs(){W=innerWidth;H=innerHeight;cv.width=W*DPR;cv.height=H*DPR;x.setTransform(DPR,0,0,DPR,0,0);cx=W/2;cy=H/2;R=Math.min(W,H)*.46}
+addEventListener('resize',rs);rs();
+let me={lat:9.9312,lon:76.2673},range=50,planes=new Map(),sel=null,sweep=0,pulses=[],alerted=new Map(),routes={};
+const ranges=[25,50,100,200];
+const rg=document.getElementById('rng');
+ranges.forEach(r=>{const b=document.createElement('button');b.textContent=r+' nm';b.onclick=()=>{range=r;[...rg.children].forEach(c=>c.classList.toggle('on',c===b));load()};if(r==range)b.classList.add('on');rg.appendChild(b)});
+const st=document.getElementById('st');
+function loc(){if(!navigator.geolocation){st.textContent='NO GPS · DEFAULT';return}
+navigator.geolocation.watchPosition(p=>{me={lat:p.coords.latitude,lon:p.coords.longitude};st.textContent='GPS LOCK';document.getElementById('ip').textContent='GPS LOCK'},()=>{st.textContent='GPS OFF · DEFAULT'},{enableHighAccuracy:true,maximumAge:5000})}
+function nm(p,dt=0){let la=p.lat,lo=p.lon;if(dt&&p.gs&&p.track!=null){const d=p.gs*dt/3600,t=p.track*Math.PI/180;la+=d*Math.cos(t)/60;lo+=d*Math.sin(t)/(60*Math.cos(la*Math.PI/180))}
+return{x:(lo-me.lon)*Math.cos(me.lat*Math.PI/180)*60,y:(la-me.lat)*60}}
+async function load(){try{const r=await fetch(`https://api.adsb.lol/v2/point/${me.lat.toFixed(3)}/${me.lon.toFixed(3)}/${Math.min(range*1.5,250)}`);const j=await r.json();const now=performance.now();const seen=new Set();
+(j.ac||[]).forEach(a=>{if(a.lat==null||a.lon==null||a.alt_baro==='ground')return;seen.add(a.hex);const o=planes.get(a.hex);
+const p={hex:a.hex,call:(a.flight||'').trim()||a.hex.toUpperCase(),type:a.t||'—',reg:a.r||'—',lat:a.lat,lon:a.lon,alt:+a.alt_baro||0,gs:a.gs||0,track:a.track??a.true_heading??0,vr:a.baro_rate||0,t:now,trail:o?o.trail:[],blip:o?o.blip:0};
+p.trail.push([a.lat,a.lon]);if(p.trail.length>25)p.trail.shift();planes.set(a.hex,p)});
+for(const k of planes.keys())if(!seen.has(k))planes.delete(k);
+st.textContent=`${planes.size} AIRCRAFT · LIVE`}catch(e){st.textContent='NO DATA'}}
+async function getRoute(p){if(routes[p.call]!==undefined)return;routes[p.call]=null;
+try{const r=await fetch(`https://api.adsb.lol/api/0/route/${p.call}`);const d=await r.json();
+const c=d._airport_codes_iata||d.airport_codes;const ap=d._airports||[];
+if(c&&c!=='unknown')routes[p.call]={codes:c.split('-'),from:ap[0]&&(ap[0].location||ap[0].name),to:ap[ap.length-1]&&(ap[ap.length-1].location||ap[ap.length-1].name)}}catch(e){}
+try{if(!routes[p.call]){const r=await fetch(`https://opensky-network.org/api/routes?callsign=${p.call}`);const d=await r.json();if(d.route)routes[p.call]={codes:d.route}}}catch(e){}
+if(sel===p.hex)card()}
+function air(c){return AIRLINES[c.slice(0,3)]||(/^[A-Z]{3}\d/.test(c)?c.slice(0,3):'Private/Unknown')}
+const card_=document.getElementById('card');
+function card(){const p=planes.get(sel);if(!p){card_.classList.remove('show');return}
+const r=routes[p.call],cs=r?r.codes:null;
+card_.innerHTML=`<h2>✈ ${p.call}</h2><div style="font-size:12px">${air(p.call)}</div>
+<div class="route">${cs?cs[0]+' → '+cs[cs.length-1]:'route n/a'}</div>
+${r&&r.from?`<div style="font-size:12px;margin-bottom:6px">${r.from} → ${r.to}</div>`:''}
+<div class="grid"><span>ALT ${p.alt.toLocaleString()} ft</span><span>SPD ${Math.round(p.gs)} kt</span><span>HDG ${Math.round(p.track)}° ${['N','NE','E','SE','S','SW','W','NW'][Math.round(p.track/45)%8]}</span><span>V/S ${p.vr>100?'▲ climbing':p.vr<-100?'▼ descending':'● level'}</span><span>TYPE ${p.type}</span><span>REG ${p.reg}</span></div>`;
+card_.classList.add('show')}
+cv.addEventListener('pointerdown',e=>{let best=null,bd=40;const now=performance.now();planes.forEach(p=>{const q=nm(p,(now-p.t)/1000),px=cx+q.x/range*R,py=cy-q.y/range*R,d=Math.hypot(px-e.clientX,py-e.clientY);if(d<bd){bd=d;best=p}});
+sel=best?best.hex:null;if(best)getRoute(best);card()});
+const al=document.getElementById('alert');
+function check(p,d){if(d<4&&p.alt<45000){const l=alerted.get(p.hex)||0;if(Date.now()-l>300000){alerted.set(p.hex,Date.now());al.textContent=`✈ ${p.call} · ${air(p.call)} OVERHEAD · ${p.alt.toLocaleString()} ft`;al.classList.add('show');navigator.vibrate&&navigator.vibrate([200,100,200]);pulses.push({r:0,big:1});setTimeout(()=>al.classList.remove('show'),6000);sel=p.hex;getRoute(p);card()}}}
+function drawPlane(x,y,a,s,col){ctx=x;ctx.save();ctx.translate(x,y);ctx.rotate(a*Math.PI/180);ctx.scale(s,s);ctx.fillStyle=col;ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(2,-3);ctx.lineTo(10,2);ctx.lineTo(10,4);ctx.lineTo(2,2);ctx.lineTo(1.5,7);ctx.lineTo(4,9);ctx.lineTo(4,10);ctx.lineTo(0,9);ctx.lineTo(-4,10);ctx.lineTo(-4,9);ctx.lineTo(-1.5,7);ctx.lineTo(-2,2);ctx.lineTo(-10,4);ctx.lineTo(-10,2);ctx.lineTo(-2,-3);ctx.closePath();ctx.fill();ctx.restore()}
+let last=performance.now();
+function frame(t){const dt=(t-last)/1000;last=t;sweep=(sweep+dt*1.1)%(Math.PI*2);
+ctx2();requestAnimationFrame(frame)}
+function ctx2(){ctx=x;ctx.clearRect(0,0,W,H);
+const g=ctx.createRadialGradient(cx,cy,0,cx,cy,R*1.1);g.addColorStop(0,'#03221a');g.addColorStop(1,'#000b06');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ctx.strokeStyle='rgba(45,255,138,.22)';ctx.lineWidth=1;
+for(let i=1;i<=4;i++){ctx.beginPath();ctx.arc(cx,cy,R*i/4,0,7);ctx.stroke();ctx.fillStyle='rgba(45,255,138,.5)';ctx.font='10px monospace';ctx.fillText(Math.round(range*i/4)+'nm',cx+4,cy-R*i/4+11)}
+ctx.beginPath();ctx.moveTo(cx-R,cy);ctx.lineTo(cx+R,cy);ctx.moveTo(cx,cy-R);ctx.lineTo(cx,cy+R);ctx.stroke();
+ctx.fillStyle='#2dff8a';ctx.font='bold 12px monospace';ctx.fillText('N',cx-4,cy-R-6);
+// sweep
+ctx.save();ctx.translate(cx,cy);ctx.rotate(sweep);
+const sg=ctx.createConicGradient?ctx.createConicGradient(-Math.PI/2.6,0,0):null;
+if(sg){sg.addColorStop(0,'rgba(45,255,138,0)');sg.addColorStop(.28,'rgba(45,255,138,.35)');sg.addColorStop(.29,'rgba(45,255,138,0)');ctx.fillStyle=sg;ctx.beginPath();ctx.moveTo(0,0);ctx.arc(0,0,R,0,Math.PI*2);ctx.fill()}
+ctx.strokeStyle='#2dff8a';ctx.shadowColor='#2dff8a';ctx.shadowBlur=12;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(R,0);ctx.stroke();ctx.restore();ctx.shadowBlur=0;
+// pulses
+pulses=pulses.filter(p=>p.r<1);pulses.forEach(p=>{p.r+=.012;ctx.strokeStyle=`rgba(255,80,80,${1-p.r})`;ctx.lineWidth=3;ctx.beginPath();ctx.arc(cx,cy,p.r*R,0,7);ctx.stroke()});
+const now=performance.now();
+planes.forEach(p=>{const q=nm(p,(now-p.t)/1000),d=Math.hypot(q.x,q.y);if(d>range*1.05)return;const px=cx+q.x/range*R,py=cy-q.y/range*R;
+// trail
+ctx.strokeStyle='rgba(45,255,138,.35)';ctx.lineWidth=1.5;ctx.beginPath();p.trail.forEach((s,i)=>{const o=nm({lat:s[0],lon:s[1]});const X=cx+o.x/range*R,Y=cy-o.y/range*R;i?ctx.lineTo(X,Y):ctx.moveTo(X,Y)});ctx.lineTo(px,py);ctx.stroke();
+// sweep blip
+let ang=Math.atan2(-q.y,q.x);if(ang<0)ang+=Math.PI*2;let diff=(sweep-ang+Math.PI*2)%(Math.PI*2);if(diff<.15)p.blip=1;p.blip=Math.max(0,p.blip-.012);
+const isSel=p.hex===sel,col=isSel?'#ffd84a':'#2dff8a';
+if(p.blip>0){ctx.strokeStyle=`rgba(45,255,138,${p.blip})`;ctx.beginPath();ctx.arc(px,py,10+(1-p.blip)*22,0,7);ctx.stroke()}
+ctx.shadowColor=col;ctx.shadowBlur=isSel?18:8;drawPlane(px,py,p.track,isSel?1.25:.85,col);ctx.shadowBlur=0;
+ctx.fillStyle=col;ctx.font='10px monospace';ctx.fillText(p.call,px+11,py-8);ctx.fillStyle='rgba(45,255,138,.6)';ctx.fillText(Math.round(p.alt/100)+'',px+11,py+3);
+check(p,d)});
+// me
+ctx.fillStyle='#4aa8ff';ctx.shadowColor='#4aa8ff';ctx.shadowBlur=16;ctx.beginPath();ctx.arc(cx,cy,6,0,7);ctx.fill();ctx.shadowBlur=0;
+ctx.strokeStyle='rgba(74,168,255,.6)';ctx.beginPath();ctx.arc(cx,cy,6+((now/60)%18),0,7);ctx.stroke();
+if(sel&&planes.has(sel)){card_.querySelector&&0}}
+setInterval(()=>{if(sel)card()},3000);
+loc();load();setInterval(load,5000);requestAnimationFrame(frame);
+setTimeout(()=>document.getElementById('intro').classList.add('out'),2800);
+</script></body></html>

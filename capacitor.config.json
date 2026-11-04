@@ -1,0 +1,3 @@
+{"appId":"com.skyradar.app","appName":"SkyRadar","webDir":"www",
+"plugins":{"CapacitorHttp":{"enabled":true}},
+"android":{"backgroundColor":"#000b06"}}
